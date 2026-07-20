@@ -1,9 +1,28 @@
 # Font selection notes
 
-**Chosen font: LXGW WenKai (霞鹜文楷)**, bundled at `assets/fonts/LXGWWenKai-Regular.ttf`
-(from the `fonts-lxgw-wenkai` apt package, OFL-licensed). Use this as
-`DEFAULT_FONT_PATH` unless you have a specific reason to try something else —
-and if you do, repeat the verification procedure below before trusting it.
+**Chosen font: Zhi Mang Xing (志莽行书)**, bundled at
+`assets/fonts/ZhiMangXing-Regular.ttf` (Google Fonts, OFL-licensed). This is
+`DEFAULT_FONT_PATH` in `render_handwriting.py`. **This was an explicit user
+correction** — the first version of this skill shipped with LXGW WenKai
+(still bundled as `LEGIBLE_FALLBACK_FONT_PATH`) because it tested as
+completely bug-free and highly legible, but the user rejected that output as
+"not looking handwritten at all" and provided reference photos of genuine
+cursive Chinese handwriting: connected/flowing strokes between characters,
+a consistent rightward italic slant, and visible pen-pressure variation
+(thicker strokes where the pen pressed harder, thinner trailing strokes).
+LXGW WenKai's neat, evenly-weighted Kaiti letterforms could not produce that
+look no matter how the compositing jitter was tuned — the fix had to be a
+different, genuinely cursive font plus rendering changes (see
+`render_handwriting.py`: `_render_glyph`'s shear/stroke-width jitter and
+`compose_field_image`'s tighter/overlapping character spacing), not just
+more randomization on top of a print-shaped font.
+
+**Takeaway for future font choices: prioritize matching the "real handwriting"
+look (slant, connected flow, pressure variation) over legibility-at-a-glance.**
+The user's own reference samples were themselves hard to read at a glance —
+that's expected and correct for authentic cursive script, not a defect to
+fix. Don't second-guess this back toward a neater font without the user
+asking for it again.
 
 ## Why not the obvious Google Fonts handwriting fonts
 
@@ -24,10 +43,12 @@ nonsensical "施工材科" to anyone reading the printed page. This was **not**
 caught by cmap-coverage checks, glyph-outline-coordinate diffing, or several
 flavors of pixel-similarity hashing — those all say the two glyphs are
 "different enough." It was only caught by rendering the specific text and
-reading it. Zhi Mang Xing didn't have that specific bug, but as a very
-cursive/grass-script style it produced a couple of other characters (e.g. 求,
-规) that were hard to confidently read at a glance — too risky for a formal
-document someone is legally attesting to.
+reading it. **Zhi Mang Xing passed the same character-by-character
+verification with no such bug** (see procedure below) and is the font
+actually in use — its more cursive/grass-script letterforms make a couple of
+characters (e.g. 求, 规) harder to read in isolation than a print font would
+be, but that's an accurate property of real cursive handwriting, not a
+correctness defect, and matches what the user explicitly asked for.
 
 **Lesson: automated glyph-coverage/pixel-diff checks are not sufficient to
 trust a handwriting font for real document content.** They catch missing
@@ -61,14 +82,16 @@ rendering every character you actually plan to use and reading it.
 4. Only after every character passes visual review, copy the font into
    `assets/fonts/` and update `DEFAULT_FONT_PATH` in `render_handwriting.py`.
 
-## Why LXGW WenKai won
+## LXGW WenKai — kept as `LEGIBLE_FALLBACK_FONT_PATH`, not the default
 
 It's a professionally maintained, systematically-designed Kaiti-style font
 (not digitized from a limited handwriting sample set), so its character
-coverage and consistency across thousands of glyphs is far more reliable than
-a font built from one person's scanned handwriting samples. It also reads as
-neat, legible pen handwriting (natural stroke variation, clearly non-print)
-rather than either sterile print or illegible cursive — a good fit for
-official documents that must remain readable. All 57 characters needed for
-this task's 3 review-opinion strings passed the visual verification above
-with zero mismatches.
+coverage and consistency across thousands of glyphs is unusually reliable,
+and all 57 characters needed for this task passed visual verification with
+zero mismatches. It's kept in `assets/fonts/` as a fallback for situations
+where legibility must trump handwritten authenticity (e.g. if a user
+explicitly asks for something easier to read, or a new document's text turns
+out to have characters that don't verify cleanly in Zhi Mang Xing). But it
+reads as neat print-adjacent Kaiti, not genuine cursive handwriting — do not
+use it as the default without a specific reason, per the user correction
+recorded at the top of this file.

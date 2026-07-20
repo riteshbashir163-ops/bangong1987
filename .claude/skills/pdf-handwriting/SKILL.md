@@ -10,6 +10,17 @@ specific blank areas of a PDF — for filling in review-opinion / inspection
 fields on Chinese construction-supervision-style forms so the printed result
 looks hand-filled rather than typed.
 
+**Target look, per explicit user correction:** genuine cursive/running-hand
+(行书) handwriting — visible rightward slant, strokes that read as connected
+and flowing between characters, and pen-pressure variation (some strokes
+heavier, some lighter/trailing) — not neat, evenly-weighted Kaiti print
+style. An earlier version of this skill defaulted to a clean, highly legible
+Kaiti font and the user rejected it as "not looking handwritten at all,"
+providing photos of real handwritten notes as the reference. Authentic
+cursive is allowed — even expected — to be a little harder to read at a
+glance than print; don't over-optimize for legibility at the cost of that
+look. See `references/font_notes.md` for the full story.
+
 ## Workflow
 
 1. **Locate the target fields.** For a brand-new document you haven't seen
@@ -50,10 +61,12 @@ looks hand-filled rather than typed.
    `page` is 0-indexed. `box` is `(x, y, w, h)` in points — the blank area to
    fill, NOT including the printed label. The function auto-picks a font size
    (14–26pt) and wraps per-character to fit, applies per-character rotation /
-   scale / baseline-wave jitter for a natural handwritten look, and inserts
-   the result as an image at that exact rect via PyMuPDF, leaving all other
-   page content untouched. Default ink color is dark blue-black
-   `(18,18,64)` — matches Chinese pen-signature convention; avoid red.
+   italic shear / stroke-weight (pen-pressure) / baseline-wave jitter with
+   tight, slightly-overlapping spacing so characters read as a connected
+   running hand rather than isolated stamps, and inserts the result as an
+   image at that exact rect via PyMuPDF, leaving all other page content
+   untouched. Default ink color is dark blue-black `(18,18,64)` — matches
+   Chinese pen-signature convention; avoid red.
 
    Can also be run standalone from the CLI:
    ```
@@ -73,9 +86,13 @@ looks hand-filled rather than typed.
    - Handwriting sits fully inside its intended box — no overlap with labels,
      table borders, stamp boxes, signature/date lines, or other fields.
    - No overflow past the box or off the page.
-   - Every character reads correctly (see the font-bug story below — don't
-     just eyeball "looks handwritten," actually read the sentence).
-   - Visibly non-mechanical (jitter/wave present) but still legible.
+   - Every character reads correctly when you read it carefully character by
+     character (see the font-bug story below — a quick "looks handwritten"
+     glance is not enough, the text must actually say what it's supposed to).
+     A cursive style being harder to skim than print is fine and expected;
+     a character silently having become a *different* character is not.
+   - Visibly cursive/connected with slant and pressure variation, not a row
+     of isolated stamped glyphs.
    - Ink color is black/blue-black, not red or washed out.
    - Everything else on the page is visually unchanged from the source.
    If anything's off, adjust and re-render before delivering — don't ship on
@@ -86,19 +103,23 @@ looks hand-filled rather than typed.
 
 ## Font: read this before changing it
 
-`assets/fonts/LXGWWenKai-Regular.ttf` (LXGW WenKai / 霞鹜文楷) is the
-default and has been verified character-by-character against the specific
-text used in this skill's original task. **Do not swap in a different
-handwriting font (e.g. a Google Fonts cursive/brush font) without repeating
-the full visual verification procedure in `references/font_notes.md` first**
-— one of the obvious-looking candidates (Ma Shan Zheng) turned out to render
-料 (material) visually identical to 科, silently corrupting the text's
-meaning, and neither cmap-coverage checks nor several pixel-similarity
-heuristics caught it. Only reading the actual rendered characters did. If a
-new document needs characters outside what's already been verified, at
-minimum run the cmap-coverage check from `font_notes.md`, and ideally the
-full reference-grid visual check for any character you haven't already
-confirmed.
+`assets/fonts/ZhiMangXing-Regular.ttf` (Zhi Mang Xing / 志莽行书, genuine
+running-cursive style) is `DEFAULT_FONT_PATH` and has been verified
+character-by-character against the specific text used in this skill's
+original task. `assets/fonts/LXGWWenKai-Regular.ttf` is also bundled as
+`LEGIBLE_FALLBACK_FONT_PATH` for the rare case legibility must win over
+authenticity — do not switch to it as the default just because a cursive
+render looks hard to read; that's expected, see the "Target look" note above.
+
+**Do not swap in a different handwriting font without repeating the full
+visual verification procedure in `references/font_notes.md` first** — one of
+the obvious-looking candidates (Ma Shan Zheng) turned out to render 料
+(material) visually identical to 科, silently corrupting the text's meaning,
+and neither cmap-coverage checks nor several pixel-similarity heuristics
+caught it. Only reading the actual rendered characters did. If a new document
+needs characters outside what's already been verified, at minimum run the
+cmap-coverage check from `font_notes.md`, and ideally the full reference-grid
+visual check for any character you haven't already confirmed.
 
 ## Files
 
@@ -108,7 +129,9 @@ confirmed.
   (`find_label_candidates`, `suggest_blank_cell`) — always eyeball the result.
 - `scripts/requirements.txt` — `pip3 install --user -r requirements.txt`
   (pymupdf, pillow, fonttools) if those aren't already available.
-- `assets/fonts/LXGWWenKai-Regular.ttf` — the verified default font.
-- `references/font_notes.md` — why this font was chosen, why two other
-  candidates were rejected, and the verification procedure to reuse before
-  trusting any new font.
+- `assets/fonts/ZhiMangXing-Regular.ttf` — the verified default (cursive) font.
+- `assets/fonts/LXGWWenKai-Regular.ttf` — verified legible fallback font, not
+  the default (see "Target look" above for why).
+- `references/font_notes.md` — why the default font is what it is, including
+  the user correction that changed it, why other candidates were rejected,
+  and the verification procedure to reuse before trusting any new font.

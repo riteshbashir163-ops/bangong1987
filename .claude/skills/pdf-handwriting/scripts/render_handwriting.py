@@ -28,16 +28,18 @@ from pathlib import Path
 import fitz  # PyMuPDF
 from PIL import Image, ImageDraw, ImageFont
 
-DEFAULT_FONT_PATH = str(Path(__file__).resolve().parent.parent / "assets" / "fonts" / "LXGWWenKai-Regular.ttf")
+DEFAULT_FONT_PATH = str(Path(__file__).resolve().parent.parent / "assets" / "fonts" / "ZhiMangXing-Regular.ttf")
+LEGIBLE_FALLBACK_FONT_PATH = str(Path(__file__).resolve().parent.parent / "assets" / "fonts" / "LXGWWenKai-Regular.ttf")
 DEFAULT_INK_COLOR = (18, 18, 64)  # dark blue-black, matches Chinese pen-signature convention
 
 _PUNCT_NO_LINE_START = set("，。、；：！？」』】)>》")
 
 
 # Fraction of box width reserved as wrap budget. Must stay comfortably above
-# 1.0 / (1 - max jitter headroom) used in _render_glyph's advance jitter so
-# that per-character spacing jitter can never push a line past the box edge
-# (see compose_field_image: advance jitter is uniform(0.96, 1.06)).
+# the max per-character advance multiplier used in compose_field_image's
+# spacing jitter (currently uniform(0.86, 1.02), i.e. characters sit at or
+# tighter than their nominal width to look like a connected running hand)
+# so a line can never render wider than what _wrap_chars planned for.
 _WRAP_WIDTH_FRACTION = 0.86
 
 
@@ -96,28 +98,57 @@ def fit_font_size_and_wrap(text, box_w_pt, box_h_pt, font_path=DEFAULT_FONT_PATH
     return min_size, lines
 
 
-def _render_glyph(ch, font, ink_color, rng):
-    """Render a single character to its own padded transparent image with a
-    small random rotation, simulating natural pen-stroke variation."""
+def _shear_image(img, shear):
+    """Apply a horizontal shear (italic-style slant) to a transparent glyph
+    image, expanding the canvas so nothing gets clipped. Positive shear
+    leans the top to the right, matching a natural right-leaning pen slant."""
+    if abs(shear) < 1e-3:
+        return img
+    w, h = img.size
+    extra = int(abs(shear) * h)
+    return img.transform(
+        (w + extra, h), Image.AFFINE,
+        (1, shear, -extra if shear > 0 else 0, 0, 1, 0),
+        resample=Image.BICUBIC,
+    )
+
+
+def _render_glyph(ch, font, ink_color, rng, base_shear=0.18):
+    """Render a single character to its own padded transparent image with
+    random rotation, italic slant, and stroke-width (pen-pressure) jitter —
+    simulating a real running/cursive hand rather than isolated print-stamp
+    characters. `stroke_width` is drawn as a second, thinner pass, not a
+    uniform outline, to keep the ink looking like brush/pen strokes instead
+    of a cartoon outline."""
     bbox = font.getbbox(ch)
     w = max(1, bbox[2] - bbox[0])
     h = max(1, bbox[3] - bbox[1])
-    pad = int(max(w, h) * 0.4) + 4
+    pad = int(max(w, h) * 0.5) + 4
     img = Image.new("RGBA", (w + 2 * pad, h + 2 * pad), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    alpha = rng.randint(222, 255)
-    draw.text((pad - bbox[0], pad - bbox[1]), ch, font=font, fill=ink_color + (alpha,))
-    angle = rng.uniform(-4.0, 4.0)
-    return img.rotate(angle, resample=Image.BICUBIC, expand=True)
+    alpha = rng.randint(215, 255)
+    # pen-pressure variation: most strokes normal weight, occasional heavier
+    # (pressed) or lighter (fast/trailing) strokes via a subtle stroke_width
+    pressure = rng.random()
+    stroke_w = 0 if pressure < 0.6 else (1 if pressure < 0.88 else 2)
+    draw.text((pad - bbox[0], pad - bbox[1]), ch, font=font, fill=ink_color + (alpha,),
+               stroke_width=stroke_w, stroke_fill=ink_color + (alpha,))
+    angle = rng.uniform(-6.0, 6.0)
+    img = img.rotate(angle, resample=Image.BICUBIC, expand=True)
+    shear = base_shear + rng.uniform(-0.08, 0.08)
+    return _shear_image(img, shear)
 
 
 def compose_field_image(lines, font_path, font_size_pt, box_w_pt, box_h_pt,
                          ink_color=DEFAULT_INK_COLOR, dpi_scale=6, rng=None,
-                         line_height_mult=1.65):
+                         line_height_mult=1.6):
     """Lay characters out along a slightly wavy per-line baseline with
-    independent per-character jitter (rotation, vertical offset, scale,
-    spacing). Returns an RGBA image sized box_w_pt*dpi_scale x
-    box_h_pt*dpi_scale (transparent background) ready to overlay on a PDF box."""
+    independent per-character jitter (rotation, italic slant, vertical
+    offset, scale, stroke weight, spacing) and tight/slightly-overlapping
+    spacing so adjacent characters visually flow into each other like a
+    running hand, rather than reading as isolated stamped glyphs. Returns an
+    RGBA image sized box_w_pt*dpi_scale x box_h_pt*dpi_scale (transparent
+    background) ready to overlay on a PDF box."""
     rng = rng or random.Random()
     box_w_px = int(box_w_pt * dpi_scale)
     box_h_px = int(box_h_pt * dpi_scale)
@@ -141,23 +172,24 @@ def compose_field_image(lines, font_path, font_size_pt, box_w_pt, box_h_pt,
                 x += nominal_advance
                 continue
             glyph_img = _render_glyph(ch, font, ink_color, rng)
-            scale = rng.uniform(0.94, 1.08)
+            scale = rng.uniform(0.92, 1.12)
             if abs(scale - 1.0) > 1e-3:
                 new_size = (max(1, int(glyph_img.width * scale)), max(1, int(glyph_img.height * scale)))
                 glyph_img = glyph_img.resize(new_size, Image.LANCZOS)
-            wave_offset = math.sin(x / (font_px * 2.2) + wave_phase) * font_px * 0.05
-            jitter_y = rng.uniform(-0.04, 0.04) * font_px
+            wave_offset = math.sin(x / (font_px * 2.2) + wave_phase) * font_px * 0.07
+            jitter_y = rng.uniform(-0.06, 0.06) * font_px
             # center the (padded, possibly larger) glyph image on the cursor
             # column so ink can overflow its own cell slightly (natural for
             # handwriting) without perturbing the cursor's advance math.
             paste_x = int(x - (glyph_img.width - nominal_advance) / 2)
             paste_y = int(baseline_y - glyph_img.height * 0.72 + wave_offset + jitter_y)
             _safe_alpha_composite(canvas, glyph_img, paste_x, paste_y, box_w_px, box_h_px)
-            # advance by the nominal (un-jittered) width, with only a small
-            # cosmetic jitter — this MUST stay close to the width budget used
-            # by _wrap_chars or lines will overflow the box and characters
-            # will be silently lost past the canvas edge.
-            x += nominal_advance * rng.uniform(0.96, 1.06)
+            # advance by the nominal width pulled slightly tighter than 1.0 on
+            # average (characters overlap a touch, like a running hand) plus
+            # jitter — this MUST stay close to the width budget used by
+            # _wrap_chars or lines will overflow the box and characters will
+            # be silently lost past the canvas edge.
+            x += nominal_advance * rng.uniform(0.86, 1.02)
     return canvas
 
 
