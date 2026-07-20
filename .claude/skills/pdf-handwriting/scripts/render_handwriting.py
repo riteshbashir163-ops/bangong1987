@@ -30,17 +30,33 @@ from PIL import Image, ImageDraw, ImageFont
 
 DEFAULT_FONT_PATH = str(Path(__file__).resolve().parent.parent / "assets" / "fonts" / "ZhiMangXing-Regular.ttf")
 LEGIBLE_FALLBACK_FONT_PATH = str(Path(__file__).resolve().parent.parent / "assets" / "fonts" / "LXGWWenKai-Regular.ttf")
-DEFAULT_INK_COLOR = (18, 18, 64)  # dark blue-black, matches Chinese pen-signature convention
+# Black gel/rollerball pen (黑色签字笔) — explicit user requirement; the
+# per-glyph alpha jitter in _render_glyph still gives natural ink variation.
+DEFAULT_INK_COLOR = (0, 0, 0)
+
+# Normal human handwriting size, fixed regardless of how tall the target box
+# is — explicit user requirement ("不要因为框框的大小而改变字号"). 19pt matches
+# the size the user approved on the second page's single-line fields.
+DEFAULT_FONT_SIZE_PT = 19
+
+# Hard cap on wrapped lines (用户要求最多写两排). If text can't fit in this
+# many lines at DEFAULT_FONT_SIZE_PT, the size steps down (never below
+# MIN_FONT_SIZE_PT) until it does, rather than silently dropping characters.
+DEFAULT_MAX_LINES = 2
+MIN_FONT_SIZE_PT = 14
 
 _PUNCT_NO_LINE_START = set("，。、；：！？」』】)>》")
 
 
-# Fraction of box width reserved as wrap budget. Must stay comfortably above
-# the max per-character advance multiplier used in compose_field_image's
-# spacing jitter (currently uniform(0.86, 1.02), i.e. characters sit at or
-# tighter than their nominal width to look like a connected running hand)
-# so a line can never render wider than what _wrap_chars planned for.
-_WRAP_WIDTH_FRACTION = 0.86
+# Fraction of box width used as the wrap budget. The rendered line can never
+# exceed the planned nominal width by more than the max per-character advance
+# multiplier in compose_field_image's spacing jitter (uniform(0.86, 1.02),
+# mean ~0.94 — characters sit at or tighter than nominal width to look like
+# a connected running hand), so this fraction may go up to ~0.95 before a
+# worst-case jitter roll could push a line past the box edge. 0.95 is needed
+# to fit the standard two-line review comment at the fixed 19pt size; the
+# typical (mean-jitter) rendered line still ends well short of the border.
+_WRAP_WIDTH_FRACTION = 0.95
 
 
 def _char_advance(ch, font, draw):
@@ -78,20 +94,20 @@ def _wrap_chars(text, font, max_width_px, draw):
 
 
 def fit_font_size_and_wrap(text, box_w_pt, box_h_pt, font_path=DEFAULT_FONT_PATH,
-                            min_size=14, max_size=26, dpi_scale=6, line_height_mult=1.65):
-    """Pick the largest font size in [min_size, max_size] pt whose greedy
-    character-wrap fits within box_h_pt at line_height_mult * size. Returns
-    (font_size_pt, list_of_lines). Falls back to min_size (possibly
-    overflowing) if nothing fits."""
+                            preferred_size=DEFAULT_FONT_SIZE_PT, min_size=MIN_FONT_SIZE_PT,
+                            max_lines=DEFAULT_MAX_LINES, dpi_scale=6, line_height_mult=1.6):
+    """Wrap `text` at a FIXED preferred font size (normal handwriting size —
+    the size never grows to fill a tall box). Only if the text cannot fit in
+    `max_lines` at that size does the size step down, stopping at `min_size`
+    (at which point the max_lines cap yields to not losing characters).
+    Returns (font_size_pt, list_of_lines)."""
     tmp = Image.new("RGBA", (10, 10))
     draw = ImageDraw.Draw(tmp)
     box_w_px = box_w_pt * dpi_scale
-    box_h_px = box_h_pt * dpi_scale
-    for size in range(max_size, min_size - 1, -1):
+    for size in range(preferred_size, min_size - 1, -1):
         font = ImageFont.truetype(font_path, int(size * dpi_scale))
         lines = _wrap_chars(text, font, box_w_px * _WRAP_WIDTH_FRACTION, draw)
-        total_height = size * dpi_scale * line_height_mult * len(lines)
-        if total_height <= box_h_px:
+        if len(lines) <= max_lines:
             return size, lines
     font = ImageFont.truetype(font_path, int(min_size * dpi_scale))
     lines = _wrap_chars(text, font, box_w_px * _WRAP_WIDTH_FRACTION, draw)
@@ -158,7 +174,11 @@ def compose_field_image(lines, font_path, font_size_pt, box_w_pt, box_h_pt,
 
     line_height = font_px * line_height_mult
     total_text_height = line_height * len(lines)
-    top_margin = max(0.0, (box_h_px - total_text_height) / 2)
+    # Top-aligned, not vertically centered: with a fixed handwriting size a
+    # tall box holds fewer lines than it "could," and a real person starts
+    # writing from the first line under the label — centering would float
+    # the text oddly in the middle of a large empty cell.
+    top_margin = min(line_height * 0.2, max(0.0, (box_h_px - total_text_height) / 2))
     left_margin = font_px * 0.12
 
     draw_measure = ImageDraw.Draw(canvas)
@@ -212,13 +232,21 @@ def _safe_alpha_composite(canvas, glyph_img, paste_x, paste_y, box_w_px, box_h_p
 
 def overlay_handwritten_text(input_pdf, output_pdf, placements, font_path=DEFAULT_FONT_PATH,
                               ink_color=DEFAULT_INK_COLOR, dpi_scale=4, seed=None,
-                              min_size=14, max_size=26):
+                              font_size=DEFAULT_FONT_SIZE_PT, min_size=MIN_FONT_SIZE_PT,
+                              max_lines=DEFAULT_MAX_LINES):
     """Overlay simulated handwriting onto `input_pdf` at each placement and
     save to `output_pdf` (must differ from input_pdf; source is never modified).
+
+    The text is set at the fixed `font_size` (normal handwriting size — it
+    does NOT scale up to fill tall boxes) and wraps to at most `max_lines`
+    lines, stepping the size down toward `min_size` only when the text is too
+    long to fit the line cap otherwise.
 
     placements: list of dicts, each:
         {"page": int (0-indexed), "text": str, "box": (x, y, w, h) in PDF points}
         optional per-placement overrides: "font_size", "ink_color", "font_path"
+        (a per-placement "font_size" pins that exact size, skipping the
+        max_lines step-down logic)
     """
     assert str(input_pdf) != str(output_pdf), "output_pdf must differ from input_pdf"
     rng = random.Random(seed)
@@ -236,7 +264,8 @@ def overlay_handwritten_text(input_pdf, output_pdf, placements, font_path=DEFAUL
                                      w * dpi_scale * _WRAP_WIDTH_FRACTION, ImageDraw.Draw(tmp))
             else:
                 size, lines = fit_font_size_and_wrap(p["text"], w, h, f_path,
-                                                      min_size=min_size, max_size=max_size,
+                                                      preferred_size=font_size,
+                                                      min_size=min_size, max_lines=max_lines,
                                                       dpi_scale=dpi_scale)
             field_img = compose_field_image(lines, f_path, size, w, h, ink_color=ink,
                                              dpi_scale=dpi_scale, rng=rng)

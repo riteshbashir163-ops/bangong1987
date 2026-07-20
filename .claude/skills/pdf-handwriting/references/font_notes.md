@@ -1,5 +1,31 @@
 # Font selection notes
 
+## Round-2 user feedback: ink color, size, line count (do not revert)
+
+After the round-1 font swap (below) shipped, the user gave three more
+concrete corrections, all now baked into `render_handwriting.py` defaults:
+
+1. **Ink must be black**, not the blue-black `(18,18,64)` this skill started
+   with — `DEFAULT_INK_COLOR = (0, 0, 0)`.
+2. **Font size must NOT scale up to fill a bigger box.** The original
+   `fit_font_size_and_wrap` grew the size until the text filled the box
+   height, which made the same sentence look conspicuously bigger in a tall
+   box (page 1's `审查意见`, ~142pt tall) than in a short one (page 2's
+   fields, ~30–54pt tall) — obviously wrong, since a real person writes at
+   the same size regardless of how much blank space is available.
+   `DEFAULT_FONT_SIZE_PT = 19` (the size the user had already approved on
+   page 2) is now fixed and does not respond to box height at all.
+3. **Cap at 2 lines** — `DEFAULT_MAX_LINES = 2`. `fit_font_size_and_wrap` only
+   steps the font size down (toward `MIN_FONT_SIZE_PT = 14`) if the text
+   can't be wrapped into 2 lines at 19pt; it never grows past 19pt even when
+   a box is tall enough for the text to comfortably sit on one line.
+
+A side effect: `compose_field_image` was changed from vertically centering
+text in the box to **top-aligning** it (small top margin only), since a
+fixed size no longer reliably fills tall boxes and centering left an odd gap
+above short text — top alignment matches where a real reviewer's pen would
+actually land, right under the printed label.
+
 **Chosen font: Zhi Mang Xing (志莽行书)**, bundled at
 `assets/fonts/ZhiMangXing-Regular.ttf` (Google Fonts, OFL-licensed). This is
 `DEFAULT_FONT_PATH` in `render_handwriting.py`. **This was an explicit user

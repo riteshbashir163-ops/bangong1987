@@ -10,16 +10,30 @@ specific blank areas of a PDF — for filling in review-opinion / inspection
 fields on Chinese construction-supervision-style forms so the printed result
 looks hand-filled rather than typed.
 
-**Target look, per explicit user correction:** genuine cursive/running-hand
-(行书) handwriting — visible rightward slant, strokes that read as connected
-and flowing between characters, and pen-pressure variation (some strokes
-heavier, some lighter/trailing) — not neat, evenly-weighted Kaiti print
-style. An earlier version of this skill defaulted to a clean, highly legible
-Kaiti font and the user rejected it as "not looking handwritten at all,"
-providing photos of real handwritten notes as the reference. Authentic
-cursive is allowed — even expected — to be a little harder to read at a
-glance than print; don't over-optimize for legibility at the cost of that
-look. See `references/font_notes.md` for the full story.
+**Target look, per explicit user corrections (two rounds so far):** genuine
+cursive/running-hand (行书) handwriting — visible rightward slant, strokes
+that read as connected and flowing between characters, and pen-pressure
+variation (some strokes heavier, some lighter/trailing) — not neat,
+evenly-weighted Kaiti print style. An earlier version of this skill defaulted
+to a clean, highly legible Kaiti font and the user rejected it as "not
+looking handwritten at all," providing photos of real handwritten notes as
+the reference. Authentic cursive is allowed — even expected — to be a little
+harder to read at a glance than print; don't over-optimize for legibility at
+the cost of that look.
+
+A second round of feedback fixed three more defaults that must NOT be
+reverted without the user asking again:
+- **Black ink**, not blue-black — `DEFAULT_INK_COLOR = (0, 0, 0)`.
+- **Fixed font size**, not scaled to fill the box — `DEFAULT_FONT_SIZE_PT = 19`,
+  matching normal handwriting size. A big box just gets more empty space
+  below the text, not bigger characters — that's what a real person does.
+- **Max 2 lines** — `DEFAULT_MAX_LINES = 2`. Font size only steps down (never
+  below `MIN_FONT_SIZE_PT`) if the text genuinely can't fit 2 lines at 19pt;
+  it never grows past 19pt even if 1 line would fit easily in a short box.
+- Text is **top-aligned**, not vertically centered, so it starts right under
+  the label like real handwriting would, rather than floating mid-box.
+
+See `references/font_notes.md` for the full story on both rounds.
 
 ## Workflow
 
@@ -59,14 +73,16 @@ look. See `references/font_notes.md` for the full story.
    ```
 
    `page` is 0-indexed. `box` is `(x, y, w, h)` in points — the blank area to
-   fill, NOT including the printed label. The function auto-picks a font size
-   (14–26pt) and wraps per-character to fit, applies per-character rotation /
-   italic shear / stroke-weight (pen-pressure) / baseline-wave jitter with
-   tight, slightly-overlapping spacing so characters read as a connected
-   running hand rather than isolated stamps, and inserts the result as an
-   image at that exact rect via PyMuPDF, leaving all other page content
-   untouched. Default ink color is dark blue-black `(18,18,64)` — matches
-   Chinese pen-signature convention; avoid red.
+   fill, NOT including the printed label. The function sets text at a FIXED
+   normal-handwriting size (19pt by default — does not grow to fill a tall
+   box), wraps per-character up to a 2-line cap (stepping the size down only
+   if 2 lines genuinely won't hold the text), top-aligns it under the label,
+   and applies per-character rotation / italic shear / stroke-weight
+   (pen-pressure) / baseline-wave jitter with tight, slightly-overlapping
+   spacing so characters read as a connected running hand rather than
+   isolated stamps. The result is inserted as an image at that exact rect via
+   PyMuPDF, leaving all other page content untouched. Default ink color is
+   **black** (gel/rollerball pen) — do not use blue-black or red.
 
    Can also be run standalone from the CLI:
    ```
