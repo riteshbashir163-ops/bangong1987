@@ -60,7 +60,19 @@ imperfection — real writing is never perfectly uniform:
   or identical.
 Use one seeded RNG for the run so it's reproducible but every page differs.
 
-See `references/font_notes.md` for the full story on all four rounds.
+**Guard against the variation pushing text out of its cell.** Position/indent
+jitter plus the ink-inflating glyph jitter can shove a line that "just fits"
+past its box edge (clipping the tail) or across a cell border. Two protections:
+`compose_field_image` bounds each line's random start-indent by that line's
+actual free slack (a near-full line gets ~0 indent). And for any field that is
+a **long single line in a narrow cell**, size it *conservatively* (leave margin
+for the ~15% jitter inflation — don't max out the advance-width fit) and
+**verify by measuring the rendered ink x-bbox per page**, not by advance math.
+To measure ink: render black-bg/white-ink and `getbbox()` (inverting first,
+since `getbbox()` on a white background returns the whole canvas), and exclude
+table/divider lines from the x-range you check.
+
+See `references/font_notes.md` for the full story on all five rounds.
 
 ## Workflow
 

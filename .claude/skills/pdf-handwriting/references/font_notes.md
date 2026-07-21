@@ -1,5 +1,32 @@
 # Font selection notes
 
+## Round-5 fix: per-page jitter pushed a tight single line out of its cell
+
+The round-4 variation broke the width-constrained 施工左 line
+(`符合设计及施工质量检验与评定标准的要求。`, 20 chars in a narrow ~247pt column):
+on most pages the handwriting ran past the column divider into the next cell
+and/or got clipped at the box edge. Two causes, both fixed:
+1. **The random per-line start-indent** (`x += uniform(0,0.6)*font_px`) was
+   applied even to a line that already nearly filled its box, shoving the tail
+   off the right edge. Fixed in `compose_field_image`: the indent is now
+   **bounded by the line's actual free slack** (`box_w - line_nominal -
+   left_margin - a small pad`), so a near-full line gets ~0 indent and can
+   never be pushed past the edge; only lines with real slack shift visibly.
+2. **Sizing a near-full single line optimistically.** Advance-width says a size
+   "fits", but the handwriting jitter (rotation/scale-outliers/spacing) inflates
+   a line's real ink ~15% — enough to push a just-fits line over. Fix (driver
+   level): size such tight single lines **conservatively** (target the ink to
+   end with clear margin before the boundary — here ~11pt for 20 chars), keep
+   the box narrower than the cell, and **verify by measuring the rendered ink
+   x-bbox per page** (not by advance math). Measure ink with a black-bg/
+   white-ink render + `getbbox()` (note: `getbbox()` on a white-bg image
+   returns the whole canvas — invert first), and exclude table/divider lines
+   from the measured x-range.
+
+Lesson: when a field is a long single line in a narrow cell, don't max out the
+size — leave margin for jitter, and confirm with pixel measurement, because
+advance-based fitting + realism jitter will silently overflow.
+
 ## Round-4 user feedback: per-page variation & imperfection (multi-page docs)
 
 "每一篇的字体和位置需要有不同的点，不能每一张都一个模版一个位置，还有打钩也要

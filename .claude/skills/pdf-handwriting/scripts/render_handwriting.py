@@ -218,11 +218,17 @@ def compose_field_image(lines, font_path, font_size_pt, box_w_pt, box_h_pt,
         x = left_margin
         wave_phase = rng.uniform(0, 2 * math.pi)
         # A real hand doesn't keep a perfectly horizontal baseline — give each
-        # line its own small slope (drifts up or down across the line) and a
-        # slightly different starting indent, so no two lines/pages look
-        # stamped from the same template.
+        # line its own small slope and a slightly different starting indent so
+        # no two lines/pages look stamped from a template. CRITICAL: the indent
+        # is bounded by this line's actual free space so it can NEVER push the
+        # line past the box's right edge (which would clip the tail or shove it
+        # across a cell border). A near-full line therefore gets ~0 indent; only
+        # lines with real slack (short lines) get a visible position shift.
         slope = rng.uniform(-0.05, 0.05)
-        x += rng.uniform(0.0, 0.6) * font_px
+        line_nominal = sum(_char_advance(c, font, draw_measure) for c in line)
+        slack = box_w_px - line_nominal - left_margin
+        max_indent = max(0.0, min(0.55 * font_px, slack - 0.03 * box_w_px))
+        x += rng.uniform(0.0, max_indent)
         for ch in line:
             nominal_advance = _char_advance(ch, font, draw_measure)
             if ch == " ":
