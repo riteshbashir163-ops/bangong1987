@@ -35,10 +35,17 @@ reverted without the user asking again:
 - Text is **top-aligned**, not vertically centered, so it starts right under
   the label like real handwriting would, rather than floating mid-box.
 
-A third round asked for **thinner strokes** — `DEFAULT_STROKE_THINNING = 1.0`
-erodes each glyph's stroke weight so the running-script hand reads finer than
-the font's native weight (tune per document by eye; higher = thinner). The
-old pen-pressure `stroke_width` thickening was removed as too heavy.
+A third round asked for **thinner strokes**, then course-corrected — thin but
+still clearly visible, and **at real printed handwriting size**:
+- `DEFAULT_STROKE_THINNING = 0.3` (mild erosion via `_thin_alpha`) — thinning
+  `1.0` made it faint/"不明显"; keep the ink solid black and prominent (alpha
+  floor ~238–255). "Thinner" = a finer pen line, not a faint one.
+- Size to what a person actually writes on paper (~14–18pt), **not** the tiny
+  machine-print size being replaced. Match real handwriting, subject to the
+  cell fitting (long lines may wrap or auto-shrink to avoid clipping).
+- **Lossless, high-res output:** render overlays at `dpi_scale=8` (~576 DPI at
+  print size) and save with lossless zlib only —
+  `doc.save(out, garbage=4, deflate=True, clean=True)`. Never JPEG/lossy.
 
 See `references/font_notes.md` for the full story on all three rounds.
 
@@ -120,14 +127,18 @@ See `references/font_notes.md` for the full story on all three rounds.
    `locate_fields.find_checkbox_glyphs(page)` — see that function's docstring
    for grouping which box is which (always render and confirm before ticking).
 
-   **Sizing for dense/small-cell forms:** the 19pt default suits large
-   review-comment boxes. Forms whose machine text is tiny (e.g.
-   分部工程质量评定表 uses ~8pt SimSun in small cells) need a small fixed size
-   instead — pass a per-placement `"font_size"` (~10pt worked there) or a
-   document-wide `font_size=`. Match the cell, don't force 19pt. Pump
-   `dpi_scale=6` for crisp thin strokes at small sizes, and compress the
-   output on save (`doc.save(out, garbage=4, deflate=True, deflate_images=True,
-   clean=True)`) since many small overlay images can bloat the file.
+   **Sizing — write at real printed handwriting size (~14–18pt), not the size
+   of the machine text you're replacing.** The 19pt default suits large
+   review-comment boxes; dense forms like 分部工程质量评定表 (machine text ~8pt)
+   still get ~14–16pt handwriting — a person writing on that form writes bigger
+   than the print, wrapping a long opinion across 2 lines rather than writing
+   tiny. Set per-placement `"font_size"`, allow `max_lines=2` for long lines,
+   and for a width-constrained single-line slot pick the largest size that
+   fits one line (measure with `ImageFont.getlength`) so nothing wraps off and
+   gets clipped. Do NOT shrink to match the machine text — that reads as too
+   small. Render at `dpi_scale=8` (~576 DPI) for crisp print and save
+   **losslessly**: `doc.save(out, garbage=4, deflate=True, clean=True)` (zlib
+   only — never lossy/JPEG; the user requires lossless output).
 
 3. **Verify visually — mandatory, not optional.** Render the affected pages
    back to PNG and actually look at them:

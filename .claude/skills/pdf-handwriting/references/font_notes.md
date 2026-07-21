@@ -2,13 +2,29 @@
 
 ## Round-3 user feedback: thinner strokes + replace machine text + checkmarks
 
-- **Thinner strokes.** The round-1/2 output (Zhi Mang Xing at full weight)
-  read as too heavy. `DEFAULT_STROKE_THINNING = 1.0` now erodes each glyph's
-  alpha (`_thin_alpha` via `MinFilter`) so strokes are finer than the font's
-  native weight, and the old random `stroke_width` pen-pressure *thickening*
-  pass was removed. Tune the value per document by looking at the render
-  (higher = thinner; too high breaks thin strokes). Keep it thin — the user
-  explicitly wanted a fine-pen look, not the heavier earlier weight.
+- **Thinner strokes — but keep them clearly visible.** Round-1/2 (Zhi Mang
+  Xing at full weight) read as too heavy, so `_thin_alpha` (MinFilter erosion,
+  controlled by `stroke_thinning`) was added and the old `stroke_width`
+  pen-pressure *thickening* removed. First attempt set thinning `1.0`, which
+  the user rejected as faint/"一点都不明显". **Corrected default is a MILD
+  `DEFAULT_STROKE_THINNING = 0.3`** plus a high, near-opaque alpha floor
+  (238–255) so the ink stays solid black and prominent. Lesson: "thinner" here
+  means a finer pen line, NOT a faint one — err toward visible.
+
+- **Real, print-sized handwriting.** The same round-3 correction ("字体小了，
+  打印出来太小了，要懂得打印出来真正的人类写字的大小") means: size the writing to
+  what a person actually writes on the printed page (~5–7mm ≈ 14–18pt), not to
+  the tiny machine-print size it replaces. On the 分部工程质量评定表 the opinion
+  lines are ~15pt (wrapping to 2 lines in their cell), the grade 合格 ~16pt,
+  and the width-constrained 施工左 line auto-sized (~12–14pt) to fit one line
+  without clipping. Match real handwriting size, subject only to the cell fitting.
+
+- **Lossless, high-resolution output.** "文件输出必须是无损的." Render overlays at
+  a high supersample (`dpi_scale=8` ≈ 576 DPI at print size) and save with
+  lossless zlib only — `doc.save(out, garbage=4, deflate=True, clean=True)`.
+  `deflate` is lossless; never use JPEG/lossy image re-encoding. (Earlier the
+  small text at `dpi_scale=6`/~10pt looked soft; bigger size + higher
+  dpi_scale fixed the crispness the "无损" complaint was really about.)
 - **Replacing machine-typed text** (not just filling blanks) became a needed
   capability: `overlay_handwritten_text` placements accept a `whiteout` rect
   that paints opaque white over the old print before the handwriting goes on.

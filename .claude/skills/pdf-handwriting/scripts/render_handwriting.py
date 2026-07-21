@@ -50,10 +50,11 @@ DEFAULT_MAX_LINES = 2
 MIN_FONT_SIZE_PT = 8
 
 # Stroke thinning: erode each glyph's alpha by this many supersampled pixels
-# so the running-script strokes read thinner than the font's native weight
-# (用户第三轮反馈: 上一版偏粗，写细一点). 0 = the font's own weight; ~1.0 is a
-# subtle thinning at dpi_scale 6. Tuned per document by looking at the render.
-DEFAULT_STROKE_THINNING = 1.0
+# so the running-script strokes read a touch thinner than the font's native
+# weight. Kept MILD (0.3): round-3 asked for finer strokes, but pushing it to
+# 1.0 made the ink faint/"不明显" — the strokes must stay clearly visible,
+# solid black. 0 = the font's own (heavier) weight. Tune per doc by eye.
+DEFAULT_STROKE_THINNING = 0.3
 
 _PUNCT_NO_LINE_START = set("，。、；：！？」』】)>》")
 
@@ -170,7 +171,9 @@ def _render_glyph(ch, font, ink_color, rng, base_shear=0.18, thinning=0.0):
     pad = int(max(w, h) * 0.5) + 4
     img = Image.new("RGBA", (w + 2 * pad, h + 2 * pad), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    alpha = rng.randint(210, 252)
+    # keep ink solid/dark (small alpha jitter only) so strokes stay prominent —
+    # too much transparency reads as faint/washed-out ("不明显").
+    alpha = rng.randint(238, 255)
     draw.text((pad - bbox[0], pad - bbox[1]), ch, font=font, fill=ink_color + (alpha,))
     img = _thin_alpha(img, thinning)
     angle = rng.uniform(-6.0, 6.0)
@@ -288,7 +291,8 @@ def overlay_handwritten_text(input_pdf, output_pdf, placements=None, font_path=D
                               ink_color=DEFAULT_INK_COLOR, dpi_scale=4, seed=None,
                               font_size=DEFAULT_FONT_SIZE_PT, min_size=MIN_FONT_SIZE_PT,
                               max_lines=DEFAULT_MAX_LINES, thinning=DEFAULT_STROKE_THINNING,
-                              checkmarks=None, checkmark_scale=1.3, checkmark_dpi_scale=8):
+                              line_height_mult=1.6, checkmarks=None, checkmark_scale=1.3,
+                              checkmark_dpi_scale=8):
     """Overlay simulated handwriting (and optional checkmarks) onto `input_pdf`
     and save to `output_pdf` (must differ from input_pdf; source untouched).
 
@@ -335,7 +339,8 @@ def overlay_handwritten_text(input_pdf, output_pdf, placements=None, font_path=D
                                                       min_size=min_size, max_lines=max_lines,
                                                       dpi_scale=dpi_scale)
             field_img = compose_field_image(lines, f_path, size, w, h, ink_color=ink,
-                                             dpi_scale=dpi_scale, rng=rng, thinning=thinning)
+                                             dpi_scale=dpi_scale, rng=rng, thinning=thinning,
+                                             line_height_mult=line_height_mult)
             buf = io.BytesIO()
             field_img.save(buf, format="PNG")
             pix = fitz.Pixmap(buf.getvalue())
