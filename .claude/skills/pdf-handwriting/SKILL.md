@@ -47,7 +47,20 @@ still clearly visible, and **at real printed handwriting size**:
   print size) and save with lossless zlib only —
   `doc.save(out, garbage=4, deflate=True, clean=True)`. Never JPEG/lossy.
 
-See `references/font_notes.md` for the full story on all three rounds.
+A fourth round (filling many copies of the same form) required **per-page
+variation so pages don't look stamped from one template**, plus visible
+imperfection — real writing is never perfectly uniform:
+- Vary **position and size per placement/page** (the biggest lever): nudge each
+  field's box a few pt and jitter the font size per page. Bias size *down* for
+  wrap-critical lines so nothing overflows/clips.
+- Baseline **tilt/slope per line**, wider per-glyph rotation/size/spacing jitter
+  with occasional outliers (built into `compose_field_image`/`_render_glyph`).
+- **Every checkmark unique** — `_draw_checkmark_image` randomizes geometry, and
+  the overlay loop adds per-tick scale/offset so ticks aren't perfectly centered
+  or identical.
+Use one seeded RNG for the run so it's reproducible but every page differs.
+
+See `references/font_notes.md` for the full story on all four rounds.
 
 ## Workflow
 

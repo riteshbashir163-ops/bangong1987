@@ -176,9 +176,13 @@ def _render_glyph(ch, font, ink_color, rng, base_shear=0.18, thinning=0.0):
     alpha = rng.randint(238, 255)
     draw.text((pad - bbox[0], pad - bbox[1]), ch, font=font, fill=ink_color + (alpha,))
     img = _thin_alpha(img, thinning)
-    angle = rng.uniform(-6.0, 6.0)
+    # rotation + slant vary per glyph; an occasional glyph tips noticeably more
+    # (nobody writes every character at the same angle).
+    angle = rng.uniform(-7.0, 7.0)
+    if rng.random() < 0.15:
+        angle += rng.uniform(-6.0, 6.0)
     img = img.rotate(angle, resample=Image.BICUBIC, expand=True)
-    shear = base_shear + rng.uniform(-0.08, 0.08)
+    shear = base_shear + rng.uniform(-0.11, 0.11)
     return _shear_image(img, shear)
 
 
@@ -213,30 +217,41 @@ def compose_field_image(lines, font_path, font_size_pt, box_w_pt, box_h_pt,
         baseline_y = top_margin + li * line_height + line_height * 0.72
         x = left_margin
         wave_phase = rng.uniform(0, 2 * math.pi)
+        # A real hand doesn't keep a perfectly horizontal baseline — give each
+        # line its own small slope (drifts up or down across the line) and a
+        # slightly different starting indent, so no two lines/pages look
+        # stamped from the same template.
+        slope = rng.uniform(-0.05, 0.05)
+        x += rng.uniform(0.0, 0.6) * font_px
         for ch in line:
             nominal_advance = _char_advance(ch, font, draw_measure)
             if ch == " ":
                 x += nominal_advance
                 continue
             glyph_img = _render_glyph(ch, font, ink_color, rng, thinning=thinning)
-            scale = rng.uniform(0.92, 1.12)
+            # per-character size variation, with an occasional larger/smaller
+            # outlier (real writing isn't uniform — some strokes run big).
+            scale = rng.uniform(0.90, 1.15)
+            if rng.random() < 0.12:
+                scale *= rng.uniform(0.82, 1.22)
             if abs(scale - 1.0) > 1e-3:
                 new_size = (max(1, int(glyph_img.width * scale)), max(1, int(glyph_img.height * scale)))
                 glyph_img = glyph_img.resize(new_size, Image.LANCZOS)
-            wave_offset = math.sin(x / (font_px * 2.2) + wave_phase) * font_px * 0.07
-            jitter_y = rng.uniform(-0.06, 0.06) * font_px
+            wave_offset = math.sin(x / (font_px * 2.2) + wave_phase) * font_px * 0.08
+            slope_offset = slope * (x - left_margin)
+            jitter_y = rng.uniform(-0.08, 0.08) * font_px
             # center the (padded, possibly larger) glyph image on the cursor
             # column so ink can overflow its own cell slightly (natural for
             # handwriting) without perturbing the cursor's advance math.
             paste_x = int(x - (glyph_img.width - nominal_advance) / 2)
-            paste_y = int(baseline_y - glyph_img.height * 0.72 + wave_offset + jitter_y)
+            paste_y = int(baseline_y - glyph_img.height * 0.72 + wave_offset + slope_offset + jitter_y)
             _safe_alpha_composite(canvas, glyph_img, paste_x, paste_y, box_w_px, box_h_px)
             # advance by the nominal width pulled slightly tighter than 1.0 on
             # average (characters overlap a touch, like a running hand) plus
             # jitter — this MUST stay close to the width budget used by
             # _wrap_chars or lines will overflow the box and characters will
             # be silently lost past the canvas edge.
-            x += nominal_advance * rng.uniform(0.86, 1.02)
+            x += nominal_advance * rng.uniform(0.84, 1.03)
     return canvas
 
 
@@ -259,31 +274,45 @@ def _safe_alpha_composite(canvas, glyph_img, paste_x, paste_y, box_w_px, box_h_p
 
 def _draw_checkmark_image(size_px, ink_color, rng):
     """Draw a hand-drawn checkmark (✓) as an RGBA image: a short down-stroke
-    into a low vertex, then a longer up-stroke to the top-right, with small
-    per-point jitter and rounded joints so it reads as pen-drawn rather than a
-    geometric tick. Sized to fill `size_px`; callers usually place it slightly
-    larger than the target box so the tick overshoots naturally."""
-    W = H = size_px
+    into a low vertex, then a longer up-stroke to the top-right. Every tick is
+    deliberately different — the vertex position, arm lengths/angles, curvature,
+    stroke width, ink darkness and a small overall rotation all vary — so no two
+    checkmarks look identical (real ticks never are). Sized to fill `size_px`;
+    callers usually place it slightly larger than the target box so it
+    overshoots naturally."""
+    # oversize the working canvas so a rotated tick isn't clipped
+    W = H = int(size_px * 1.35)
     img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
+    ox = (W - size_px) / 2
+    oy = (H - size_px) / 2
 
-    def jit(fx, fy, j=0.05):
-        return (fx * W + rng.uniform(-j, j) * W, fy * H + rng.uniform(-j, j) * H)
+    def jit(fx, fy, j=0.06):
+        return (ox + fx * size_px + rng.uniform(-j, j) * size_px,
+                oy + fy * size_px + rng.uniform(-j, j) * size_px)
 
-    start = jit(0.16, 0.52)
-    vertex = jit(0.40, 0.78)
-    end = jit(0.88, 0.14)
-    # a midpoint on each arm lets the joints round into a slight curve
-    mid1 = ((start[0] + vertex[0]) / 2, (start[1] + vertex[1]) / 2 + H * 0.02)
-    mid2 = ((vertex[0] + end[0]) / 2, (vertex[1] + end[1]) / 2 + H * 0.03)
+    # randomize the tick geometry per instance
+    vx = rng.uniform(0.34, 0.46)          # vertex x
+    vy = rng.uniform(0.72, 0.86)          # vertex depth
+    sx = rng.uniform(0.10, 0.24)          # short-arm start x
+    sy = rng.uniform(0.44, 0.60)          # short-arm start height
+    ex = rng.uniform(0.82, 0.96)          # long-arm end x
+    ey = rng.uniform(0.06, 0.22)          # long-arm end height
+    start = jit(sx, sy)
+    vertex = jit(vx, vy)
+    end = jit(ex, ey)
+    curve = rng.uniform(0.0, 0.05)
+    mid1 = ((start[0] + vertex[0]) / 2, (start[1] + vertex[1]) / 2 + H * curve)
+    mid2 = ((vertex[0] + end[0]) / 2, (vertex[1] + end[1]) / 2 + H * curve)
     pts = [start, mid1, vertex, mid2, end]
-    width = max(2, int(size_px * 0.085))
-    alpha = rng.randint(225, 255)
+    width = max(2, int(size_px * rng.uniform(0.07, 0.11)))
+    alpha = rng.randint(232, 255)
     draw.line(pts, fill=ink_color + (alpha,), width=width, joint="curve")
-    # round the two stroke ends so they don't look chopped
     for (px, py) in (start, end):
         r = width / 2
         draw.ellipse([px - r, py - r, px + r, py + r], fill=ink_color + (alpha,))
+    # small overall tilt so the whole tick leans a bit differently each time
+    img = img.rotate(rng.uniform(-14, 10), resample=Image.BICUBIC, expand=False)
     return img
 
 
@@ -350,12 +379,17 @@ def overlay_handwritten_text(input_pdf, output_pdf, placements=None, font_path=D
             page = doc[c["page"]]
             bx0, by0, bx1, by1 = c["box"]
             bw, bh = bx1 - bx0, by1 - by0
-            side_px = max(8, int(max(bw, bh) * checkmark_scale * checkmark_dpi_scale))
+            base = max(bw, bh)
+            # per-tick size + position variation so no two checkmarks match,
+            # and none sits perfectly centered (real ticks are placed by hand).
+            sc = checkmark_scale * rng.uniform(0.88, 1.20)
+            off_x = rng.uniform(-0.22, 0.22) * base
+            off_y = rng.uniform(-0.20, 0.20) * base
+            side_px = max(8, int(base * sc * checkmark_dpi_scale))
             ink = c.get("ink_color", ink_color)
             mark = _draw_checkmark_image(side_px, ink, rng)
-            # center the (overshooting) mark on the checkbox
-            cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2
-            half = max(bw, bh) * checkmark_scale / 2
+            cx, cy = (bx0 + bx1) / 2 + off_x, (by0 + by1) / 2 + off_y
+            half = base * sc / 2
             rect = fitz.Rect(cx - half, cy - half, cx + half, cy + half)
             buf = io.BytesIO()
             mark.save(buf, format="PNG")

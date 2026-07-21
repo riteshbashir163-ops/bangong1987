@@ -1,5 +1,29 @@
 # Font selection notes
 
+## Round-4 user feedback: per-page variation & imperfection (multi-page docs)
+
+"每一篇的字体和位置需要有不同的点，不能每一张都一个模版一个位置，还有打钩也要
+有不同的笔画，要每一张看起来就是真人在写，真人写肯定会有瑕疵不能太完美的."
+
+On a multi-page batch (same text on all 10 pages), identical size + identical
+relative position + subtle jitter read as a stamped template. Fix = make every
+page/instance visibly its own filling:
+- **Position & size vary per placement.** The driver nudges each field's box by
+  a few pt (dx/dy) and jitters the font size per page (opinions biased slightly
+  smaller so a 2-line block never grows past its divider; a width-constrained
+  single line only shrinks so it can't wrap off). This is the biggest lever —
+  layout-level differences are what make pages look non-templated at a glance.
+- **Baseline tilt + richer glyph jitter** (in `compose_field_image` /
+  `_render_glyph`): each line gets a small random slope and start indent, and
+  per-glyph rotation/size/spacing ranges were widened with occasional outliers,
+  so no line is perfectly level or uniform.
+- **Every checkmark is unique** (`_draw_checkmark_image` + per-tick scale/offset
+  in the overlay loop): vertex position, arm lengths/angles, curvature, stroke
+  width, ink darkness, overall rotation, size, and placement within the box all
+  vary. Ticks are intentionally *not* perfectly centered.
+Guiding principle: real handwriting is imperfect — don't make it too clean or
+too repeated. When filling N copies of the same form, decorrelate them.
+
 ## Round-3 user feedback: thinner strokes + replace machine text + checkmarks
 
 - **Thinner strokes — but keep them clearly visible.** Round-1/2 (Zhi Mang
