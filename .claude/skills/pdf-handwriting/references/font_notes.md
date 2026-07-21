@@ -1,5 +1,26 @@
 # Font selection notes
 
+## Round-3 user feedback: thinner strokes + replace machine text + checkmarks
+
+- **Thinner strokes.** The round-1/2 output (Zhi Mang Xing at full weight)
+  read as too heavy. `DEFAULT_STROKE_THINNING = 1.0` now erodes each glyph's
+  alpha (`_thin_alpha` via `MinFilter`) so strokes are finer than the font's
+  native weight, and the old random `stroke_width` pen-pressure *thickening*
+  pass was removed. Tune the value per document by looking at the render
+  (higher = thinner; too high breaks thin strokes). Keep it thin — the user
+  explicitly wanted a fine-pen look, not the heavier earlier weight.
+- **Replacing machine-typed text** (not just filling blanks) became a needed
+  capability: `overlay_handwritten_text` placements accept a `whiteout` rect
+  that paints opaque white over the old print before the handwriting goes on.
+  Used to convert a whole machine-filled form (施工/监理/建设 opinions +
+  质量等级 合格 cells) to handwriting.
+- **Hand-drawn checkmarks** in checkboxes: `checkmarks=[{page, box}]` +
+  `_draw_checkmark_image`. On the 分部工程质量评定表 the checkboxes were
+  private-use text glyphs (U+E5B6), found via `find_checkbox_glyphs`.
+- **Small-cell sizing:** that form's cells hold ~8pt machine text, so the 19pt
+  default was wrong there — a per-placement `font_size ≈ 10` was used. Size to
+  the document's cells; the "fixed size" rule is per-document, not a global 19.
+
 ## Round-2 user feedback: ink color, size, line count (do not revert)
 
 After the round-1 font swap (below) shipped, the user gave three more

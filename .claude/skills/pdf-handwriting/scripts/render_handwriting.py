@@ -26,7 +26,7 @@ import random
 from pathlib import Path
 
 import fitz  # PyMuPDF
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageFilter
 
 DEFAULT_FONT_PATH = str(Path(__file__).resolve().parent.parent / "assets" / "fonts" / "ZhiMangXing-Regular.ttf")
 LEGIBLE_FALLBACK_FONT_PATH = str(Path(__file__).resolve().parent.parent / "assets" / "fonts" / "LXGWWenKai-Regular.ttf")
@@ -43,7 +43,17 @@ DEFAULT_FONT_SIZE_PT = 19
 # many lines at DEFAULT_FONT_SIZE_PT, the size steps down (never below
 # MIN_FONT_SIZE_PT) until it does, rather than silently dropping characters.
 DEFAULT_MAX_LINES = 2
-MIN_FONT_SIZE_PT = 14
+# Floor for the step-down. Kept low (8pt) so this skill can also fill small
+# cells on dense forms (e.g. 分部工程质量评定表, whose machine text is ~8pt) by
+# passing a small preferred font_size — it does not affect large-cell docs
+# that pass preferred=19 and fit within max_lines without ever stepping down.
+MIN_FONT_SIZE_PT = 8
+
+# Stroke thinning: erode each glyph's alpha by this many supersampled pixels
+# so the running-script strokes read thinner than the font's native weight
+# (用户第三轮反馈: 上一版偏粗，写细一点). 0 = the font's own weight; ~1.0 is a
+# subtle thinning at dpi_scale 6. Tuned per document by looking at the render.
+DEFAULT_STROKE_THINNING = 1.0
 
 _PUNCT_NO_LINE_START = set("，。、；：！？」』】)>》")
 
@@ -129,26 +139,40 @@ def _shear_image(img, shear):
     )
 
 
-def _render_glyph(ch, font, ink_color, rng, base_shear=0.18):
+def _thin_alpha(img, thinning):
+    """Erode the glyph's alpha channel by ~`thinning` supersampled pixels so
+    the ink strokes read thinner than the font's native weight, without
+    touching the RGB (ink color). MinFilter shrinks the opaque region; a
+    fractional remainder is applied as a partial (blended) erosion so the
+    strength is smoothly tunable rather than jumping a whole pixel at a time."""
+    if thinning <= 0:
+        return img
+    r, g, b, a = img.split()
+    whole = int(thinning)
+    for _ in range(whole):
+        a = a.filter(ImageFilter.MinFilter(3))
+    frac = thinning - whole
+    if frac > 1e-3:
+        eroded = a.filter(ImageFilter.MinFilter(3))
+        a = Image.blend(a, eroded, frac)
+    return Image.merge("RGBA", (r, g, b, a))
+
+
+def _render_glyph(ch, font, ink_color, rng, base_shear=0.18, thinning=0.0):
     """Render a single character to its own padded transparent image with
-    random rotation, italic slant, and stroke-width (pen-pressure) jitter —
-    simulating a real running/cursive hand rather than isolated print-stamp
-    characters. `stroke_width` is drawn as a second, thinner pass, not a
-    uniform outline, to keep the ink looking like brush/pen strokes instead
-    of a cartoon outline."""
+    random rotation and italic slant, simulating a real running/cursive hand
+    rather than isolated print-stamp characters. `thinning` erodes the stroke
+    weight (see _thin_alpha); pen-pressure is conveyed by per-glyph alpha
+    jitter alone (no stroke_width thickening pass — that read as too heavy)."""
     bbox = font.getbbox(ch)
     w = max(1, bbox[2] - bbox[0])
     h = max(1, bbox[3] - bbox[1])
     pad = int(max(w, h) * 0.5) + 4
     img = Image.new("RGBA", (w + 2 * pad, h + 2 * pad), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    alpha = rng.randint(215, 255)
-    # pen-pressure variation: most strokes normal weight, occasional heavier
-    # (pressed) or lighter (fast/trailing) strokes via a subtle stroke_width
-    pressure = rng.random()
-    stroke_w = 0 if pressure < 0.6 else (1 if pressure < 0.88 else 2)
-    draw.text((pad - bbox[0], pad - bbox[1]), ch, font=font, fill=ink_color + (alpha,),
-               stroke_width=stroke_w, stroke_fill=ink_color + (alpha,))
+    alpha = rng.randint(210, 252)
+    draw.text((pad - bbox[0], pad - bbox[1]), ch, font=font, fill=ink_color + (alpha,))
+    img = _thin_alpha(img, thinning)
     angle = rng.uniform(-6.0, 6.0)
     img = img.rotate(angle, resample=Image.BICUBIC, expand=True)
     shear = base_shear + rng.uniform(-0.08, 0.08)
@@ -157,7 +181,7 @@ def _render_glyph(ch, font, ink_color, rng, base_shear=0.18):
 
 def compose_field_image(lines, font_path, font_size_pt, box_w_pt, box_h_pt,
                          ink_color=DEFAULT_INK_COLOR, dpi_scale=6, rng=None,
-                         line_height_mult=1.6):
+                         line_height_mult=1.6, thinning=DEFAULT_STROKE_THINNING):
     """Lay characters out along a slightly wavy per-line baseline with
     independent per-character jitter (rotation, italic slant, vertical
     offset, scale, stroke weight, spacing) and tight/slightly-overlapping
@@ -191,7 +215,7 @@ def compose_field_image(lines, font_path, font_size_pt, box_w_pt, box_h_pt,
             if ch == " ":
                 x += nominal_advance
                 continue
-            glyph_img = _render_glyph(ch, font, ink_color, rng)
+            glyph_img = _render_glyph(ch, font, ink_color, rng, thinning=thinning)
             scale = rng.uniform(0.92, 1.12)
             if abs(scale - 1.0) > 1e-3:
                 new_size = (max(1, int(glyph_img.width * scale)), max(1, int(glyph_img.height * scale)))
@@ -230,33 +254,76 @@ def _safe_alpha_composite(canvas, glyph_img, paste_x, paste_y, box_w_px, box_h_p
     canvas.alpha_composite(cropped, (dest_x, dest_y))
 
 
-def overlay_handwritten_text(input_pdf, output_pdf, placements, font_path=DEFAULT_FONT_PATH,
+def _draw_checkmark_image(size_px, ink_color, rng):
+    """Draw a hand-drawn checkmark (✓) as an RGBA image: a short down-stroke
+    into a low vertex, then a longer up-stroke to the top-right, with small
+    per-point jitter and rounded joints so it reads as pen-drawn rather than a
+    geometric tick. Sized to fill `size_px`; callers usually place it slightly
+    larger than the target box so the tick overshoots naturally."""
+    W = H = size_px
+    img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    def jit(fx, fy, j=0.05):
+        return (fx * W + rng.uniform(-j, j) * W, fy * H + rng.uniform(-j, j) * H)
+
+    start = jit(0.16, 0.52)
+    vertex = jit(0.40, 0.78)
+    end = jit(0.88, 0.14)
+    # a midpoint on each arm lets the joints round into a slight curve
+    mid1 = ((start[0] + vertex[0]) / 2, (start[1] + vertex[1]) / 2 + H * 0.02)
+    mid2 = ((vertex[0] + end[0]) / 2, (vertex[1] + end[1]) / 2 + H * 0.03)
+    pts = [start, mid1, vertex, mid2, end]
+    width = max(2, int(size_px * 0.085))
+    alpha = rng.randint(225, 255)
+    draw.line(pts, fill=ink_color + (alpha,), width=width, joint="curve")
+    # round the two stroke ends so they don't look chopped
+    for (px, py) in (start, end):
+        r = width / 2
+        draw.ellipse([px - r, py - r, px + r, py + r], fill=ink_color + (alpha,))
+    return img
+
+
+def overlay_handwritten_text(input_pdf, output_pdf, placements=None, font_path=DEFAULT_FONT_PATH,
                               ink_color=DEFAULT_INK_COLOR, dpi_scale=4, seed=None,
                               font_size=DEFAULT_FONT_SIZE_PT, min_size=MIN_FONT_SIZE_PT,
-                              max_lines=DEFAULT_MAX_LINES):
-    """Overlay simulated handwriting onto `input_pdf` at each placement and
-    save to `output_pdf` (must differ from input_pdf; source is never modified).
+                              max_lines=DEFAULT_MAX_LINES, thinning=DEFAULT_STROKE_THINNING,
+                              checkmarks=None, checkmark_scale=1.3, checkmark_dpi_scale=8):
+    """Overlay simulated handwriting (and optional checkmarks) onto `input_pdf`
+    and save to `output_pdf` (must differ from input_pdf; source untouched).
 
     The text is set at the fixed `font_size` (normal handwriting size — it
     does NOT scale up to fill tall boxes) and wraps to at most `max_lines`
     lines, stepping the size down toward `min_size` only when the text is too
-    long to fit the line cap otherwise.
+    long to fit the line cap otherwise. `thinning` erodes stroke weight.
 
     placements: list of dicts, each:
         {"page": int (0-indexed), "text": str, "box": (x, y, w, h) in PDF points}
         optional per-placement overrides: "font_size", "ink_color", "font_path"
         (a per-placement "font_size" pins that exact size, skipping the
-        max_lines step-down logic)
+        max_lines step-down logic);
+        optional "whiteout": (x0, y0, x1, y1) — an opaque white rectangle drawn
+        BEFORE the handwriting, to cover pre-existing machine-typed text that
+        the handwriting is replacing (keep it to the text line's bbox so it
+        never reaches the cell borders).
+
+    checkmarks: optional list of {"page": int, "box": (x0, y0, x1, y1)} — draws
+        a hand-drawn ✓ centered on each box, scaled by `checkmark_scale` so it
+        slightly overshoots (natural for a checkbox tick).
     """
     assert str(input_pdf) != str(output_pdf), "output_pdf must differ from input_pdf"
     rng = random.Random(seed)
     doc = fitz.open(input_pdf)
     try:
-        for p in placements:
+        for p in (placements or []):
             page = doc[p["page"]]
             x, y, w, h = p["box"]
             f_path = p.get("font_path", font_path)
             ink = p.get("ink_color", ink_color)
+            if "whiteout" in p:
+                wx0, wy0, wx1, wy1 = p["whiteout"]
+                page.draw_rect(fitz.Rect(wx0, wy0, wx1, wy1), color=None,
+                               fill=(1, 1, 1), fill_opacity=1, overlay=True)
             if "font_size" in p:
                 size = p["font_size"]
                 tmp = Image.new("RGBA", (10, 10))
@@ -268,11 +335,27 @@ def overlay_handwritten_text(input_pdf, output_pdf, placements, font_path=DEFAUL
                                                       min_size=min_size, max_lines=max_lines,
                                                       dpi_scale=dpi_scale)
             field_img = compose_field_image(lines, f_path, size, w, h, ink_color=ink,
-                                             dpi_scale=dpi_scale, rng=rng)
+                                             dpi_scale=dpi_scale, rng=rng, thinning=thinning)
             buf = io.BytesIO()
             field_img.save(buf, format="PNG")
             pix = fitz.Pixmap(buf.getvalue())
             page.insert_image(fitz.Rect(x, y, x + w, y + h), pixmap=pix, overlay=True)
+
+        for c in (checkmarks or []):
+            page = doc[c["page"]]
+            bx0, by0, bx1, by1 = c["box"]
+            bw, bh = bx1 - bx0, by1 - by0
+            side_px = max(8, int(max(bw, bh) * checkmark_scale * checkmark_dpi_scale))
+            ink = c.get("ink_color", ink_color)
+            mark = _draw_checkmark_image(side_px, ink, rng)
+            # center the (overshooting) mark on the checkbox
+            cx, cy = (bx0 + bx1) / 2, (by0 + by1) / 2
+            half = max(bw, bh) * checkmark_scale / 2
+            rect = fitz.Rect(cx - half, cy - half, cx + half, cy + half)
+            buf = io.BytesIO()
+            mark.save(buf, format="PNG")
+            page.insert_image(rect, pixmap=fitz.Pixmap(buf.getvalue()), overlay=True)
+
         doc.save(output_pdf)
     finally:
         doc.close()

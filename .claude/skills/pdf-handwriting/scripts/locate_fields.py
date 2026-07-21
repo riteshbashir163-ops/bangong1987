@@ -14,6 +14,34 @@ the heuristic below isn't good enough.
 import fitz  # PyMuPDF
 
 
+def find_checkbox_glyphs(page, codepoint=0xE5B6):
+    """Return the bounding rects of every checkbox glyph on `page`, sorted
+    top-to-bottom then left-to-right.
+
+    Many Chinese official forms draw their checkboxes not as vector rectangles
+    but as a private-use-area "hollow square" text glyph (e.g. U+E5B6 in an
+    embedded subset font). Such glyphs do NOT appear as '□' in
+    page.get_text() plain text, so they must be found by scanning the char
+    spans of get_text("rawdict") for the exact codepoint.
+
+    Returns a list of fitz.Rect. Grouping the result into fields (e.g. "the
+    first N belong to the 监理 block, the next N to the 建设 block") and
+    picking, say, the leftmost box on each line as the affirmative option is
+    left to the caller, since it depends on the form — ALWAYS render the page
+    and confirm which box is which before drawing a checkmark into it.
+    """
+    rects = []
+    data = page.get_text("rawdict")
+    for block in data.get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                for ch in span.get("chars", []):
+                    if ord(ch["c"]) == codepoint:
+                        rects.append(fitz.Rect(ch["bbox"]))
+    rects.sort(key=lambda r: (round(r.y0, 1), round(r.x0, 1)))
+    return rects
+
+
 def find_label_candidates(pdf_path, page_index, label_text):
     """Return every bounding box (fitz.Rect, top-left origin) where
     `label_text` literally appears on the page. Try a few label variants

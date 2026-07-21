@@ -1,6 +1,6 @@
 ---
 name: pdf-handwriting
-description: Fill blank review-opinion, comment, or remark fields on Chinese paperwork (e.g. 审查意见, 外观检查, 检查验收结果 boxes on 监理/工程验收 forms, inspection or acceptance records, and similar official documents) with text rendered as realistic simulated pen handwriting — not machine/print font — then return the completed PDF. Trigger whenever the user uploads a Chinese form PDF and asks to fill in review comments by hand, wants inserted text to look authentically handwritten/非打印体 so it's convincing when printed or signed off, or says things like "手写"/"模拟手写"/"用手写体填写". Not for generic PDF merge/split/OCR/AcroForm field-filling (use the pdf skill instead), and not for Word/Excel/PowerPoint documents (use docx/xlsx/pptx).
+description: Fill or replace fields on Chinese paperwork (e.g. 审查意见, 外观检查, 检查验收结果, 施工/监理/建设单位意见 boxes on 监理/工程验收/质量评定 forms and similar official documents) with text rendered as realistic simulated pen handwriting — not machine/print font — and optionally hand-draw ✓ checkmarks in checkboxes, then return the completed PDF. Handles both blank fields AND replacing existing machine-typed text (whites it out, then handwrites over it). Trigger whenever the user uploads a Chinese form PDF and asks to fill in / replace comments by hand, tick 打钩 checkboxes by hand, wants inserted text to look authentically handwritten/非打印体 so it's convincing when printed or signed off, or says things like "手写"/"模拟手写"/"用手写体填写"/"替换成手写"/"手写打钩". Not for generic PDF merge/split/OCR/AcroForm field-filling (use the pdf skill instead), and not for Word/Excel/PowerPoint documents (use docx/xlsx/pptx).
 ---
 
 # PDF Handwriting Fill
@@ -27,13 +27,20 @@ reverted without the user asking again:
 - **Fixed font size**, not scaled to fill the box — `DEFAULT_FONT_SIZE_PT = 19`,
   matching normal handwriting size. A big box just gets more empty space
   below the text, not bigger characters — that's what a real person does.
+  (Size is fixed *within one document*; different documents use whatever
+  fixed size fits their cells — see the small-cell note under "Sizing".)
 - **Max 2 lines** — `DEFAULT_MAX_LINES = 2`. Font size only steps down (never
   below `MIN_FONT_SIZE_PT`) if the text genuinely can't fit 2 lines at 19pt;
   it never grows past 19pt even if 1 line would fit easily in a short box.
 - Text is **top-aligned**, not vertically centered, so it starts right under
   the label like real handwriting would, rather than floating mid-box.
 
-See `references/font_notes.md` for the full story on both rounds.
+A third round asked for **thinner strokes** — `DEFAULT_STROKE_THINNING = 1.0`
+erodes each glyph's stroke weight so the running-script hand reads finer than
+the font's native weight (tune per document by eye; higher = thinner). The
+old pen-pressure `stroke_width` thickening was removed as too heavy.
+
+See `references/font_notes.md` for the full story on all three rounds.
 
 ## Workflow
 
@@ -90,6 +97,38 @@ See `references/font_notes.md` for the full story on both rounds.
    ```
    where `placements.json` is a list of `{"page": int, "text": str, "box": [x,y,w,h]}`.
 
+   **Replacing existing machine-typed text** (not just filling a blank): add a
+   `"whiteout": (x0, y0, x1, y1)` to the placement — an opaque white rectangle
+   is drawn over that rect *before* the handwriting, covering the old print.
+   Keep the whiteout to the machine text line's own bbox (pad ~1.5–2pt) so it
+   never reaches cell borders or the line above/below. Get the machine text's
+   bbox with `page.search_for("<the exact string>")` (it may return several
+   rects for one visual line — union them). Then place the handwriting box on
+   the same line (usually a bit wider, since handwriting runs wider than 8pt
+   print). Example per placement:
+   ```python
+   {"page": p, "text": "同意监理意见。", "font_size": 10,
+    "whiteout": (x0-1.5, y0-2, x1+1.5, y1+2),      # covers the old print
+    "box": (cell_left, (y0+y1)/2 - h/2, cell_w, h)} # handwriting, same line
+   ```
+
+   **Checkmarks** (打钩 in a checkbox): pass `checkmarks=[{"page": p, "box":
+   (x0,y0,x1,y1)}, ...]`; a hand-drawn ✓ is centered on each box (scaled to
+   slightly overshoot, like a real tick). For checkboxes that are private-use
+   text glyphs rather than drawn rectangles (common on Chinese forms, e.g.
+   U+E5B6 hollow squares), locate them with
+   `locate_fields.find_checkbox_glyphs(page)` — see that function's docstring
+   for grouping which box is which (always render and confirm before ticking).
+
+   **Sizing for dense/small-cell forms:** the 19pt default suits large
+   review-comment boxes. Forms whose machine text is tiny (e.g.
+   分部工程质量评定表 uses ~8pt SimSun in small cells) need a small fixed size
+   instead — pass a per-placement `"font_size"` (~10pt worked there) or a
+   document-wide `font_size=`. Match the cell, don't force 19pt. Pump
+   `dpi_scale=6` for crisp thin strokes at small sizes, and compress the
+   output on save (`doc.save(out, garbage=4, deflate=True, deflate_images=True,
+   clean=True)`) since many small overlay images can bloat the file.
+
 3. **Verify visually — mandatory, not optional.** Render the affected pages
    back to PNG and actually look at them:
    ```python
@@ -109,7 +148,14 @@ See `references/font_notes.md` for the full story on both rounds.
      a character silently having become a *different* character is not.
    - Visibly cursive/connected with slant and pressure variation, not a row
      of isolated stamped glyphs.
-   - Ink color is black/blue-black, not red or washed out.
+   - Ink color is black, not washed out. Strokes thin (per the thinner-strokes
+     default) but not broken/faint.
+   - When **replacing** machine text: the old print is fully covered (no grey
+     ghosting behind or beside the handwriting) and the white patch didn't eat
+     a cell border or an adjacent line.
+   - When **ticking checkboxes**: the ✓ is in the intended box only (e.g. the
+     affirmative 相符/同意, NOT 不相符/不同意), one per box, reading as a
+     hand-drawn tick.
    - Everything else on the page is visually unchanged from the source.
    If anything's off, adjust and re-render before delivering — don't ship on
    the first attempt without looking.
@@ -140,9 +186,12 @@ visual check for any character you haven't already confirmed.
 ## Files
 
 - `scripts/render_handwriting.py` — core rendering + overlay engine
-  (`overlay_handwritten_text`, `fit_font_size_and_wrap`, `compose_field_image`).
+  (`overlay_handwritten_text` with `placements` incl. optional `whiteout`,
+  and `checkmarks`; plus `fit_font_size_and_wrap`, `compose_field_image`,
+  `_draw_checkmark_image`, and the `thinning`/`DEFAULT_STROKE_THINNING` knob).
 - `scripts/locate_fields.py` — assistive field-location heuristics
-  (`find_label_candidates`, `suggest_blank_cell`) — always eyeball the result.
+  (`find_label_candidates`, `suggest_blank_cell`, and `find_checkbox_glyphs`
+  for private-use-area checkbox glyphs) — always eyeball the result.
 - `scripts/requirements.txt` — `pip3 install --user -r requirements.txt`
   (pymupdf, pillow, fonttools) if those aren't already available.
 - `assets/fonts/ZhiMangXing-Regular.ttf` — the verified default (cursive) font.
